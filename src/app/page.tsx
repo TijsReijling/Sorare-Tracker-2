@@ -32,6 +32,8 @@ const POS_COLORS: Record<string, { bg: string; text: string }> = {
 export default function Home() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [otpCode, setOtpCode] = useState('')
+  const [otpSessionChallenge, setOtpSessionChallenge] = useState<string | null>(null)
   const [token, setToken] = useState<string | null>(null)
   const [slug, setSlug] = useState('')
   const [wcPlayers, setWcPlayers] = useState<Player[]>([])
@@ -43,6 +45,22 @@ export default function Home() {
   const [posFilter, setPosFilter] = useState('')
   const [groupFilter, setGroupFilter] = useState('')
   const [showAll, setShowAll] = useState(false)
+
+  async function fetchSquad(jwtToken: string) {
+    setLoadingMsg('Loading your cards...')
+    const squadRes = await fetch('/api/sorare', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: jwtToken }),
+    })
+    const squadData = await squadRes.json()
+    if (!squadRes.ok || squadData.error) throw new Error(squadData.error)
+    setToken(jwtToken)
+    setSlug(squadData.slug)
+    setWcPlayers(squadData.wcPlayers)
+    setAllPlayers(squadData.allPlayers)
+    setTotalCards(squadData.total)
+  }
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault()
@@ -59,21 +77,13 @@ export default function Home() {
       const authData = await authRes.json()
       if (!authRes.ok || authData.error) throw new Error(authData.error)
 
-      setLoadingMsg('Loading your cards...')
+      if (authData.requires2FA) {
+        setOtpSessionChallenge(authData.otpSessionChallenge)
+        setLoading(false)
+        return
+      }
 
-      const squadRes = await fetch('/api/sorare', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token: authData.token }),
-      })
-      const squadData = await squadRes.json()
-      if (!squadRes.ok || squadData.error) throw new Error(squadData.error)
-
-      setToken(authData.token)
-      setSlug(squadData.slug)
-      setWcPlayers(squadData.wcPlayers)
-      setAllPlayers(squadData.allPlayers)
-      setTotalCards(squadData.total)
+      await fetchSquad(authData.token)
     } catch (err: any) {
       setError(err.message || 'Something went wrong.')
     } finally {
@@ -81,8 +91,30 @@ export default function Home() {
     }
   }
 
-  const groups = [...new Set(wcPlayers.map(p => p.group).filter(Boolean))] as string[]
-  const positions = [...new Set(wcPlayers.map(p => p.position).filter(Boolean))]
+  async function handleOtp(e: React.FormEvent) {
+    e.preventDefault()
+    setError('')
+    setLoading(true)
+    setLoadingMsg('Verifying 2FA code...')
+
+    try {
+      const authRes = await fetch('/api/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ otpSessionChallenge, otpAttempt: otpCode }),
+      })
+      const authData = await authRes.json()
+      if (!authRes.ok || authData.error) throw new Error(authData.error)
+      await fetchSquad(authData.token)
+    } catch (err: any) {
+      setError(err.message || 'Invalid 2FA code.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const groups = Array.from(new Set(wcPlayers.map(p => p.group).filter(Boolean))) as string[]
+  const positions = Array.from(new Set(wcPlayers.map(p => p.position).filter(Boolean)))
 
   const filtered = wcPlayers.filter(p => {
     if (posFilter && p.position !== posFilter) return false
@@ -100,7 +132,6 @@ export default function Home() {
           </p>
         </div>
 
-        {/* Stats */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12, marginBottom: '1.5rem' }}>
           {[
             { label: 'WC cards', value: wcPlayers.length },
@@ -115,7 +146,6 @@ export default function Home() {
           ))}
         </div>
 
-        {/* Filters */}
         <div style={{ display: 'flex', gap: 10, marginBottom: '1rem', flexWrap: 'wrap', alignItems: 'center' }}>
           <select value={posFilter} onChange={e => setPosFilter(e.target.value)}
             style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #d1d5db', fontSize: 13, background: '#fff' }}>
@@ -134,7 +164,6 @@ export default function Home() {
           </button>
         </div>
 
-        {/* Player grid */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 12 }}>
           {(showAll ? allPlayers : filtered).map(p => {
             const rarity = RARITY_STYLES[p.rarity?.toLowerCase()] ?? RARITY_STYLES.common
@@ -200,6 +229,27 @@ export default function Home() {
           <div style={{ textAlign: 'center', padding: '2rem 0' }}>
             <div style={{ fontSize: 14, color: '#6b7280' }}>{loadingMsg}</div>
           </div>
+        ) : otpSessionChallenge ? (
+          <form onSubmit={handleOtp} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: 8, padding: '10px 14px', fontSize: 13, color: '#92400e' }}>
+              🔐 Two-factor authentication is enabled on your account. Check your email or authenticator app for a code.
+            </div>
+            <div>
+              <label style={{ fontSize: 13, fontWeight: 500, display: 'block', marginBottom: 4 }}>2FA code</label>
+              <input type='text' value={otpCode} onChange={e => setOtpCode(e.target.value)} required
+                placeholder='123456' maxLength={6}
+                style={{ width: '100%', padding: '8px 12px', borderRadius: 8, border: '1px solid #d1d5db', fontSize: 14, boxSizing: 'border-box', letterSpacing: '0.2em' }} />
+            </div>
+            {error && <p style={{ color: '#dc2626', fontSize: 13, margin: 0 }}>{error}</p>}
+            <button type='submit'
+              style={{ padding: '10px', borderRadius: 8, background: '#1d4ed8', color: '#fff', border: 'none', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>
+              Verify →
+            </button>
+            <button type='button' onClick={() => setOtpSessionChallenge(null)}
+              style={{ padding: '8px', borderRadius: 8, background: 'none', color: '#6b7280', border: '1px solid #d1d5db', fontSize: 13, cursor: 'pointer' }}>
+              ← Back
+            </button>
+          </form>
         ) : (
           <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <div>

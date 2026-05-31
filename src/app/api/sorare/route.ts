@@ -16,6 +16,7 @@ export async function POST(req: NextRequest) {
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token}`,
+        'JWT-AUD': 'sorare-wc-tracker',
       },
       body: JSON.stringify({
         query: `
